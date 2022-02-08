@@ -78,7 +78,48 @@ public object Space {
         it.parameters.append("access_type", accessType.parameterValue)
     }.build()
 
-    // TODO PKCE
+    /**
+     * Returns URL with authorization request.
+     * Redirect the user to it in order to receive authorization code (when the user gives their consent).
+     * See Space documentation for more information on
+     * [Authorization Code Flow](https://www.jetbrains.com/help/space/authorization-code.html)
+     * and for
+     * [details on parameters](https://www.jetbrains.com/help/space/authorization-code.html#parameters).
+     *
+     * @param scope is a space-separated list of rights required to access specific resources in Space.
+     * @param state An identifier for the current application state.
+     * The value will be passed the application after the authorization.
+     * @param redirectUri A URI in your application that can handle responses from Space. If it is not specified,
+     * the first redirect URI from application configuration in Space will be used.
+     * @param requestCredentials specifies in which cases the login form should be shown to the user.
+     * @param accessType indicates whether the application requires access to Space when the user is not online.
+     * @param codeVerifier A high-entropy cryptographic random string that uses the unreserved characters
+     * [A-Z] / [a-z] / [0-9] / "-" / "." / "_" / "~", with a minimum length of 43 characters and a maximum length of
+     * 128 characters. Can be generated using [Space.generateCodeVerifier].
+     */
+    public suspend fun authCodeSpaceUrl(
+        appInstance: SpaceAppInstance,
+        scope: String,
+        state: String? = null,
+        redirectUri: String? = null,
+        requestCredentials: OAuthRequestCredentials? = null,
+        accessType: OAuthAccessType = OAuthAccessType.ONLINE,
+        codeVerifier: String,
+    ): Url = URLBuilder(appInstance.spaceServer.oauthAuthUrl).also {
+        it.takeFrom(
+            authCodeSpaceUrl(
+                appInstance = appInstance,
+                scope = scope,
+                state = state,
+                redirectUri = redirectUri,
+                requestCredentials = requestCredentials,
+                accessType = accessType,
+            )
+        )
+        it.parameters.append("code_challenge_method", "S256")
+        it.parameters.append("code_challenge", codeChallenge(codeVerifier))
+    }.build()
+
     /**
      * Exchanges authorization code for an access token. This can be performed only once per each code.
      * See Space documentation on
@@ -90,12 +131,16 @@ public object Space {
      * [Refresh Token Flow](https://www.jetbrains.com/help/space/refresh-token.html).
      *
      * If [redirectUri] is missing, the first redirect URI from application configuration in Space will be used.
+     *
+     * If `codeVerifier` was specified during authorization code request (in [authCodeSpaceUrl]),
+     * [codeVerifier] parameter of this function must have the same value.
      */
     public suspend fun exchangeAuthCodeForToken(
         ktorClient: HttpClient,
         appInstance: SpaceAppInstance,
         authCode: String,
-        redirectUri: String? = null
+        redirectUri: String? = null,
+        codeVerifier: String? = null,
     ): SpaceTokenInfo = auth(
         ktorClient = ktorClient,
         url = appInstance.spaceServer.oauthTokenUrl,
@@ -105,7 +150,13 @@ public object Space {
             if (redirectUri != null) {
                 append("redirect_uri", redirectUri)
             }
+            if (codeVerifier != null) {
+                append("code_verifier", codeVerifier)
+            }
         },
-        authHeaderValue = "Basic " + base64("${appInstance.clientId}:${appInstance.clientSecret}")
+        authHeaderValue = appInstance.basicAuthHeaderValue()
     )
+
+    /** Generates `codeVerifier` for use in [authCodeSpaceUrl] and, subsequently, in [exchangeAuthCodeForToken] */
+    public fun generateCodeVerifier(): String = base64UrlSafe(secureRandomBytes(32))
 }
